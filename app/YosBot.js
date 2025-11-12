@@ -1,5 +1,31 @@
 const TelegramBot = require("node-telegram-bot-api");
 const { helpText, InValidCommand, mainMenuKeyboard, GlobalErrorMessage } = require("../lib/constant");
+const { marked } = require("marked");
+
+marked.setOptions({
+	mangle: false,
+	headerIds: false
+});
+
+const telegramRenderer = new marked.Renderer();
+
+telegramRenderer.paragraph = (text) => `${text}\n\n`;
+telegramRenderer.heading = (text) => `<b>${text}</b>\n\n`;
+telegramRenderer.link = (href, _title, text) => `<a href="${href}">${text}</a>`;
+telegramRenderer.strong = (text) => `<b>${text}</b>`;
+telegramRenderer.em = (text) => `<i>${text}</i>`;
+telegramRenderer.codespan = (text) => `<code>${text}</code>`;
+telegramRenderer.blockquote = (text) => `<blockquote>${text}</blockquote>\n\n`;
+telegramRenderer.list = (body) => `${body}\n`;
+telegramRenderer.listitem = (text) => `• ${text}\n`;
+telegramRenderer.hr = () => `────────\n`;
+telegramRenderer.image = (href, _title, text) => `${text ? `${text} ` : ""}${href}`;
+telegramRenderer.code = (code) => `<pre><code>${code}</code></pre>\n`;
+
+const renderMarkdownForTelegram = (markdown = "") =>
+	marked.parse(markdown, { renderer: telegramRenderer }).trim();
+
+const TELEGRAM_CAPTION_LIMIT = 1024;
 
 class Yosbot extends TelegramBot {
 	constructor(token, options) {
@@ -81,13 +107,47 @@ class Yosbot extends TelegramBot {
 			const apiCall = await fetch(newsEndpoint);
 			const response = await apiCall.json();
 			const maxNews = 3;
+			const posts = Array.isArray(response.posts) ? response.posts.slice(0, maxNews) : [];
 			
-			for (let i = 0; i < maxNews; i++) {
-				const news = response.posts[i];
-				const {title, image, headline, link} = news;
+			for (const news of posts) {
+				const { title, image, headline, link, premium_badge } = news;
+				const detailUrl = link;
+				const articleUrl = detailUrl.replace("https://jakpost.vercel.app/api/detailpost", "https://www.thejakartapost.com");
+				let postContent = "";
+
+				try {
+					const detailResponse = await fetch(detailUrl);
+					if (detailResponse.ok) {
+						const detail = await detailResponse.json();
+						postContent = detail?.detail_post?.post_content?.trim() || "";
+					}
+				} catch (detailError) {
+					console.error("Failed to get detail post:", detailError);
+				}
+
+				const captionParts = [`📰 ${title}`];
+				if (headline) {
+					captionParts.push("", headline);
+				}
+				captionParts.push("", `🔗 ${articleUrl}`);
+
+				let caption = captionParts.join("\n");
+				if (caption.length > TELEGRAM_CAPTION_LIMIT) {
+					caption = `${caption.slice(0, TELEGRAM_CAPTION_LIMIT - 3)}...`;
+				}
+
 				await this.sendPhoto(chatId, image, {
-					caption: `📰 ${title}\n\n${headline}\n\n🔗 ${link}`
+					caption
 				});
+
+				if (postContent) {
+					const htmlContent = renderMarkdownForTelegram(postContent);
+					await this.sendMessage(chatId, htmlContent, {
+						parse_mode: "HTML",
+						disable_web_page_preview: true
+					});
+				} else if (premium_badge === "premium") {
+				}
 			}
 			
 			this.sendMessage(chatId, "Pilih menu lainnya:", mainMenuKeyboard);
@@ -106,7 +166,7 @@ class Yosbot extends TelegramBot {
 			const apiCall = await fetch(quakeEndpoint);
 			const response = await apiCall.json();
 			const {gempa} = response.Infogempa;
-			const { Tanggal, Jam, Magnitude, Wilayah, Shakemap, Kedalaman} = gempa;
+			const {Tanggal, Jam, Magnitude, Wilayah, Shakemap, Kedalaman} = gempa;
 			const imgShakemap = "https://data.bmkg.go.id/DataMKG/TEWS/" + Shakemap;
 			
 			await this.sendPhoto(chatId, imgShakemap, {
@@ -126,10 +186,5 @@ class Yosbot extends TelegramBot {
 		this.sendMessage(chatId, "🛑 Bot berhenti bekerja!\n\nSilahkan ketik /start untuk memulai kembali.");
 	}
 }
-
-
-
-
-
 
 module.exports = Yosbot;
